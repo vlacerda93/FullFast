@@ -1,0 +1,122 @@
+// Schema do Prisma ORM — fonte unica de verdade do banco de dados PostgreSQL.
+// A partir deste arquivo, o Prisma gera:
+// 1) As migrations SQL versionadas no Git;
+// 2) O client TypeScript tipado para fazer consultas seguras no banco.
+
+generator client {
+  provider = "prisma-client-js" // Gera o PrismaClient usado pelos services do NestJS
+}
+
+datasource db {
+  provider = "postgresql"      // Banco relacional escolhido para o projeto
+  url      = env("DATABASE_URL") // String de conexao lida do arquivo .env (nunca fixa no codigo)
+}
+
+// ============================================================================
+// ENUMS (listas fechadas de valores aceitos no banco)
+// ============================================================================
+
+// Gancho Pos-MVP (RBAC): permite diferenciar permissoes de administrador e desenvolvedor
+// sem precisar alterar a estrutura da tabela users no futuro.
+enum UserRole {
+  ADMIN
+  DEV
+}
+
+// Ciclo de vida oficial de um deploy no fluxo de 8 passos da especificacao Terabits
+enum DeploymentStatus {
+  QUEUED     // 1. Deploy registrado pela API, aguardando pipeline
+  BUILDING   // 2. GitHub Actions rodando testes e docker build
+  DEPLOYING  // 3. API enviando .env via SFTP (chmod 600) e subindo container via SSH
+  ONLINE     // 4. Versao atualmente ativa e publicada na VPS
+  COMPLETED  // 5. Versao anterior concluida com sucesso (disponivel para Rollback em 1 clique)
+  FAILED     // 6. Falhou nos testes, no build ou na publicacao SSH/Docker
+}
+
+// ============================================================================
+// TABELA 1: users — Membros autorizados da equipe Terabits
+// ============================================================================
+model User {
+  id           String       @id @default(uuid()) // Identificador unico (UUID)
+  name         String                             // Nome exibido no painel e no historico de deploys
+  email        String       @unique               // E-mail unico usado no login
+  passwordHash String       @map("password_hash") // Senha protegida com hash BCrypt (nunca texto puro)
+  role         UserRole     @default(DEV)         // Perfil de acesso (padrao DEV; gancho para RBAC)
+  createdAt    DateTime     @default(now()) @map("created_at")
+
+  // Relacionamento 1:N — um usuario pode disparar varios deploys
+  deployments  Deployment[]
+
+  @@map("users") // Nome real da tabela no PostgreSQL (snake_case)
+}
+
+// ============================================================================
+// TABELA 2: applications — Projetos cadastrados para deploy na plataforma
+// ============================================================================
+model Application {
+  id            String        @id @default(uuid())
+  name          String                                      // Nome amigavel exibido no dashboard (ex.: "API Clientes")
+  slug          String        @unique                       // Nome seguro (ex.: "api-clientes") usado no container Docker e na pasta .env da VPS
+  repoOwner     String        @map("repo_owner")            // Dono ou organizacao no GitHub (ex.: "terabits")
+  repoName      String        @map("repo_name")             // Nome do repositorio no GitHub (ex.: "api-clientes")
+  branch        String        @default("main")              // Branch monitorada para build
+  workflowFile  String        @default("deploy.yml") @map("workflow_file") // Workflow acionado via workflow_dispatch
+  internalPort  Int           @map("internal_port")         // Porta interna onde o app escuta dentro do container (ex.: 3000 ou 8080)
+  externalPort  Int           @unique @map("external_port") // Porta externa unica alocada pela API na faixa 4000-4020 (evita conflito na VPS)
+
+  // --- Ganchos Pos-MVP (opcionais/desligados no MVP para evitar retrabalho depois) ---
+  domain        String?       @unique                       // Subdominio usado quando plugar Traefik + HTTPS (ex.: "api.terabits.com")
+  autoDeploy    Boolean       @default(false) @map("auto_deploy") // Liga/desliga deploy automatico via webhook de git push
+  webhookSecret String?       @map("webhook_secret")        // Segredo para validar autenticidade do webhook do GitHub
+
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+
+  // Relacionamentos 1:N — cada projeto tem suas variaveis de ambiente e historico de deploys
+  envVariables  EnvVariable[]
+  deployments   Deployment[]
+
+  @@map("applications")
+}
+
+// ============================================================================
+// TABELA 3: env_variables — Segredos e variaveis cifradas com AES-256-GCM
+// ============================================================================
+model EnvVariable {
+  id             String      @id @default(uuid())
+  applicationId  String      @map("application_id")  // FK para a aplicacao dona da variavel
+  envKey         String      @map("env_key")         // Nome da chave (ex.: "DATABASE_URL") — usamos env_key para evitar conflito com a palavra reservada "key"
+  encryptedValue String      @map("encrypted_value") // Valor criptografado com AES-256-GCM (nunca salvo em texto puro)
+  iv             String                              // Vetor de inicializacao unico por registro (exigido pelo AES-256-GCM)
+  authTag        String      @map("auth_tag")        // Tag de autenticidade que prova que o valor nao foi adulterado no banco
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+
+  // onDelete: Cascade garante que ao excluir o projeto, seus segredos somem junto do banco
+  application    Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  // Impede duas variaveis com a mesma chave dentro do mesmo projeto
+  @@unique([applicationId, envKey])
+  @@map("env_variables")
+}
+
+// ============================================================================
+// TABELA 4: deployments — Historico completo de deploys e base do Rollback
+// ============================================================================
+model Deployment {
+  id            String           @id @default(uuid())
+  applicationId String           @map("application_id") // FK do projeto publicado
+  triggeredById String           @map("triggered_by")   // FK do usuario que clicou em Deploy ou Rollback (auditoria)
+  imageTag      String           @map("image_tag")      // Tag imutavel no GHCR (ex.: "ghcr.io/org/app:deploy-12") usada no rollback em 1 clique
+  status        DeploymentStatus @default(QUEUED)       // Estado atual do ciclo de deploy
+  isRollback    Boolean          @default(false) @map("is_rollback") // Marca se este registro foi uma restauracao de versao anterior
+  errorMessage  String?          @map("error_message")  // Mensagem de falha amigavel caso o build ou SSH quebre
+  startedAt     DateTime         @default(now()) @map("started_at")
+  finishedAt    DateTime?        @map("finished_at")    // Preenchido quando o deploy termina (ONLINE ou FAILED)
+
+  application   Application      @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  triggeredBy   User             @relation(fields: [triggeredById], references: [id])
+
+  // Indice composto para acelerar a consulta do historico ordenado do mais recente para o mais antigo
+  @@index([applicationId, startedAt(sort: Desc)])
+  @@map("deployments")
+}

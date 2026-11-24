@@ -1,0 +1,38 @@
+# ============================================================================
+# .gitignore raiz — Monorepo FullFast (Backend, Frontend e Infra)
+# ============================================================================
+
+# Variaveis de ambiente com segredos reais (manter apenas .env.example versionado)
+.env
+.env.*
+!.env.example
+
+# Chaves privadas SSH e certificados (NUNCA versionar no Git)
+*.pem
+*.key
+*.p12
+id_rsa*
+id_ed25519*
+
+# Node.js / Next.js / TypeScript
+node_modules/
+dist/
+build/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+
+# Java / Maven / Gradle (para a frente Java na main)
+target/
+.gradle/
+*.class
+*.jar
+*.war
+
+# Logs e arquivos temporarios de SO / IDEs
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

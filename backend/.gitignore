@@ -1,0 +1,25 @@
+# Dependencias instaladas, build e cache incremental do TypeScript (nao devem ir pro Git)
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Arquivos de variaveis de ambiente com segredos reais (versionar apenas o .env.example!)
+.env
+.env.*
+!.env.example
+
+# Logs locais
+*.log
+
+# Chaves privadas SSH e certificados (NUNCA versionar no Git)
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+
+# Arquivos temporarios de sistema operacional e IDEs
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
