@@ -1,0 +1,1 @@
+Dentro desta pasta botar so o front end e as coisas relacionadas a ele
